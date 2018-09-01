@@ -21,26 +21,28 @@ class View : UIView {
     }
 }
 
-private enum Axis {
+private enum Dimension : String {
     case X, Y, Z
+}
 
-    static func draw(in: CALayer) {
-        let shape = CAShapeLayer()
-        shape.frame = `in`.bounds
-        shape.strokeColor = UIColor(white: 1, alpha: 0.8).cgColor
-        shape.lineWidth = 2
-        
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: shape.bounds.midX, y: 0)) // Vertical axis
-        path.addLine(to: CGPoint(x: shape.bounds.midX, y: shape.bounds.maxY))
-        path.move(to: CGPoint(x: 0, y: shape.bounds.midY)) // Horizontal axis
-        path.addLine(to: CGPoint(x: shape.bounds.maxX, y: shape.bounds.midY))
-        path.close()
-        
-        shape.path = path.cgPath
-        
-        `in`.addSublayer(shape)
+private class Axis {
+    let dimension: Dimension
+    var angle: Radians
+
+    init(dimension: Dimension, angle: Radians = 0) {
+        self.dimension = dimension
+        self.angle = angle
     }
+
+    var animationKey: String {
+        get { return "rotate" + dimension.rawValue }
+    }
+    
+    var animationPath: String {
+        get { return "transform.rotation." + dimension.rawValue.lowercased() }
+    }
+
+    func rotate(by: Radians) { angle = (angle + by).truncatingRemainder(dividingBy: 2 * .pi) }
 }
 
 private enum Quadrant : String {
@@ -113,100 +115,141 @@ private extension CALayer {
 class ViewController : UIViewController {
 
     @IBOutlet weak var graphView: UIView!
-    private var plane: CALayer!
     @IBOutlet weak var xButton: UIButton!
     @IBOutlet weak var yButton: UIButton!
     @IBOutlet weak var zButton: UIButton!
+    @IBOutlet weak var continuouSwitch: UISwitch!
     
+    private var plane: CALayer!
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        Axis.draw(in: graphView.layer)
+        func drawAxes(in: CGRect) -> CAShapeLayer {
+            let shape = CAShapeLayer()
 
-        plane = CALayer()
-        plane.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        plane.position = CGPoint(x: graphView.layer.bounds.width/2, y: graphView.layer.bounds.height/2)
-        plane.bounds.size = CGSize(width: graphView.layer.bounds.width/4, height: graphView.layer.bounds.width/4)
-        plane.backgroundColor = UIColor.white.cgColor
-        plane.transform.m34 = -1.0 / 500;
-       graphView.layer.addSublayer(plane)
+            shape.frame = `in`
+            shape.strokeColor = UIColor(white: 1, alpha: 0.8).cgColor
+            shape.lineWidth = 2
+            
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: shape.bounds.midX, y: 0)) // Vertical axis
+            path.addLine(to: CGPoint(x: shape.bounds.midX, y: shape.bounds.maxY))
+            path.move(to: CGPoint(x: 0, y: shape.bounds.midY)) // Horizontal axis
+            path.addLine(to: CGPoint(x: shape.bounds.maxX, y: shape.bounds.midY))
+            path.close()
+            
+            shape.path = path.cgPath
+            return shape
+        }
+
+        func makePlane(in: CGRect) -> CALayer {
+            let plane = CALayer()
+            plane.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            plane.position = CGPoint(x: `in`.midX, y: `in`.midY)
+            plane.bounds.size = CGSize(width: `in`.width/4, height: `in`.width/4)
+            plane.backgroundColor = UIColor.white.cgColor
+            plane.transform.m34 = -1.0 / 500;
+            return plane
+        }
+
+        // ***************************************************************
+
+        graphView.layer.addSublayer(drawAxes(in: graphView.layer.bounds))
+
+        plane = makePlane(in: graphView.layer.bounds)
+        graphView.layer.addSublayer(plane)
 
         for quadrant in Quadrant.all { quadrant.add(to: plane) }
     }
 
-    @IBAction func x(_ sender: UIButton) {
-        xButton.isSelected = !xButton.isSelected
-        rotation(on: .X, isActive: xButton.isSelected)
-    }
-    
-    @IBAction func y(_ sender: UIButton) {
-        yButton.isSelected = !yButton.isSelected
-        rotation(on: .Y, isActive: yButton.isSelected)
-    }
-    
-    @IBAction func z(_ sender: UIButton) {
-        zButton.isSelected = !zButton.isSelected
-        rotation(on: .Z, isActive: zButton.isSelected)
-    }
-    
+    // *************************************************************************************
+    // Rotate
     // *************************************************************************************
 
-    private func rotate(layer: CALayer, around: Axis, by: Degrees) {
+    private var xAxis = Axis(dimension: .X)
+    private var yAxis = Axis(dimension: .Y)
+    private var zAxis = Axis(dimension: .Z)
 
-        let angle = toRadians(by)
+    @IBAction func handleAxisButton(_ sender: UIButton) {
+        let axis: Axis
 
-        switch around {
-        case .X:
-            layer.transform = CATransform3DRotate(layer.transform, angle, 1, 0, 0)
-        case .Y:
-            layer.transform = CATransform3DRotate(layer.transform, angle, 0, 1, 0)
-        case .Z:
-            layer.transform = CATransform3DRotate(layer.transform, angle, 0, 0, 1)
+        switch sender {
+        case xButton: axis = xAxis
+        case yButton: axis = yAxis
+        case zButton: axis = zAxis
+        default: fatalError("Unrecognized axis button")
+        }
+        
+        if continuouSwitch.isOn {
+            sender.isSelected = !sender.isSelected
+            continuousRotation(on: axis, isEnabled: sender.isSelected)
+        }
+        else {
+            incrementallyRotate(axis: axis, by: toRadians(15))
         }
     }
-    
-    private func resetRotation(for: CALayer) {
-        `for`.transform = CATransform3DIdentity
-        `for`.transform.m34 = -1.0 / 500;
+
+    @IBAction func handleContinuousSwitch(_ sender: UISwitch) {
+
+        if !continuouSwitch.isOn {
+            xButton.isSelected = false
+            continuousRotation(on: xAxis, isEnabled: false)
+            yButton.isSelected = false
+            continuousRotation(on: xAxis, isEnabled: false)
+            zButton.isSelected = false
+            continuousRotation(on: xAxis, isEnabled: false)
+        }
     }
 
-    // *************************************************************************************
-    // Animations
-    // *************************************************************************************
-
-    private func rotation(on: Axis, isActive: Bool) {
-        
+    @IBAction func handleResetButton(_ sender: UIButton) {
+        resetIncrementalRotation()
     }
 
-    @IBAction func rotateContinuously(_ sender: UIButton) {
-        
-        let key = "rotate"
-        
-        sender.isSelected = !sender.isSelected
-        if sender.isSelected {
-            var keyPath = "transform.rotation.x"
-            if yButton.isSelected { keyPath = "transform.rotation.y" }
-            else if zButton.isSelected { keyPath = "transform.rotation.z" }
-            let animation = CABasicAnimation(keyPath: keyPath)
-            animation.fromValue = 0
-            animation.toValue = 2.0 * .pi
+    private func continuousRotation(on: Axis, isEnabled: Bool) {
+
+        if isEnabled {
+            let animation = CABasicAnimation(keyPath: on.animationPath)
+            animation.fromValue = on.angle
+            animation.toValue = on.angle + 2.0 * .pi
             animation.repeatCount = .infinity
             animation.duration = 5
             
-            plane.add(animation, forKey: key)
-            
-            var transform = CATransform3DIdentity
-            transform.m34 = -1.0 / 500;
-            plane.transform = transform
+            plane.add(animation, forKey: on.animationKey)
         }
         else {
-            plane.removeAnimation(forKey: key)
+            plane.removeAnimation(forKey: on.animationKey)
         }
     }
 
-    @IBAction func growShrink(_ sender: UIButton) {
+    private func incrementallyRotate(axis: Axis, by angle: Radians) {
 
-        let key = "breathe"
+        axis.rotate(by: angle)
+        switch axis.dimension {
+        case .X:
+            plane.transform = CATransform3DRotate(plane.transform, angle, 1, 0, 0)
+        case .Y:
+            plane.transform = CATransform3DRotate(plane.transform, angle, 0, 1, 0)
+        case .Z:
+            plane.transform = CATransform3DRotate(plane.transform, angle, 0, 0, 1)
+        }
+    }
+    
+    private func resetIncrementalRotation() {
+        xAxis.angle = 0
+        yAxis.angle = 0
+        zAxis.angle = 0
+        plane.transform = CATransform3DIdentity
+        plane.transform.m34 = -1.0 / 500;
+    }
+
+    // *************************************************************************************
+    // Expand and Contract
+    // *************************************************************************************
+
+    @IBAction func expandContract(_ sender: UIButton) {
+
+        let key = "expandContract"
 
         func resize(from: CGSize, to: CGSize, original: CGSize) {
             CATransaction.begin()
